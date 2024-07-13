@@ -42,7 +42,7 @@ def remove(text):
     url_pattern = re.compile(r'https?://\S+|www\.\S+')
     text = re.sub(url_pattern, '', text)
     # RM EMOJI
-    emoji_tag = re.compile(':.*?:')
+    emoji_tag = re.compile(':[a-zA-Z]{5}:')
     text = re.sub(emoji_tag, '', text)
     # RM 改行
     text = text.replace('\n', ' ')
