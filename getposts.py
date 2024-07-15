@@ -33,6 +33,9 @@ global posts_per_sec
 df_posts_per_sec = pandas.DataFrame(columns=['Timestamp', 'PostsPerSec'])
 posts_per_sec = 0
 
+# 記録インターバル(min)
+interval = 5
+
 def savePPS():
     global df_posts_per_sec
     global posts_per_sec
@@ -128,7 +131,7 @@ api = Mastodon(
     access_token=access_token
 )
 
-scheduler.add_job(savePPS, 'interval', minutes=5)
+scheduler.add_job(savePPS, 'interval', minutes=interval)
 print('Scheduler started...')
 
 try:
