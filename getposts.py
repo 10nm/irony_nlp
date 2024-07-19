@@ -10,7 +10,7 @@
 ### CHECKWORD: 検出したい語句
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from mastodon import Mastodon, StreamListener
+from mastodon import Mastodon, StreamListener , MastodonNetworkError
 import os
 import re
 import csv
@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 global unit
 # 保存する単位(nポスト/回)
-unit = 1000
+unit = 50
 
 global check_word
 check_word = str(os.environ.get("CHECKWORD"))
@@ -31,18 +31,31 @@ scheduler = BackgroundScheduler()
 global df_posts_per_sec
 global posts_per_sec
 df_posts_per_sec = pandas.DataFrame(columns=['Timestamp', 'PostsPerSec'])
+df_posts_per_sec = pandas.read_csv('csv/posts_per_sec.csv')
 posts_per_sec = 0
+
+global session_posts_count
+session_posts_count = 0
 
 # 記録インターバル(min)
 interval = 5
 
+def listen():
+    listener = MyStreamListener()  
+    api.stream_public(listener)
+
+
 def savePPS():
     global df_posts_per_sec
     global posts_per_sec
+    global session_posts_count
+    print(session_posts_count)
     now = datetime.datetime.now()
+    posts_per_sec = session_posts_count / (interval*60)
     new_row = {'Timestamp': now, 'PostsPerSec': posts_per_sec}
     df_posts_per_sec = pandas.concat([df_posts_per_sec, pandas.DataFrame([new_row])], ignore_index=True)
     df_posts_per_sec.to_csv('csv/posts_per_sec.csv', index=False)
+    session_posts_count = 0
 
 def save_csv(posts, n):
     if n == 0:
@@ -80,7 +93,6 @@ class MyStreamListener(StreamListener):
         self.posts = []
         self.posts_count = 0
         self.session_count = 0
-        self.start_time = time.time() 
         self.csv_row_count = 0
         self.tqdm_bar = tqdm(total=unit, desc=f"session:{self.session_count}", leave=True)
         
@@ -91,22 +103,20 @@ class MyStreamListener(StreamListener):
 
     def on_update(self, status):
         global posts_per_sec
+        global session_posts_count
+        session_posts_count += 1
+
         post = remove(status['content'])
-        if self.posts_count == 0:
-            self.start_time = time.time()
-            self.posts_count += 1
-        else:
-            self.posts_count += 1
-            posts_per_sec = self.posts_count / (time.time() - self.start_time)
-        
+
         if check_word in post:
             print(f"\n"+"{check_word}を含むポスト:"+str(post)+"\n")
             save_csv(post, 1)
        
         if self.posts_count < int(unit):
             self.posts.append(post)
-            self.tqdm_bar.set_postfix({"PPS": f"{posts_per_sec:.2f}", "All Posts": self.csv_row_count + self.posts_count + 1000*self.session_count})
+            self.tqdm_bar.set_postfix({"PPS": f"{posts_per_sec:.2f}", "All Posts": self.csv_row_count + self.posts_count + unit*self.session_count})
             self.tqdm_bar.update(1)
+            self.posts_count += 1
 
         else:
             self.session_count += 1
@@ -118,7 +128,9 @@ class MyStreamListener(StreamListener):
             save_csv(self.posts, 0)
             self.posts = []
             self.tqdm_bar.reset()
-            
+            self.tqdm_bar = tqdm(total=unit, desc=f"session:{self.session_count}", leave=True)
+            print(datetime.datetime.now())
+
 client_id=os.environ.get("CID")
 client_secret=os.environ.get("CIS")
 access_token=os.environ.get("ACS")
@@ -134,11 +146,16 @@ api = Mastodon(
 scheduler.add_job(savePPS, 'interval', minutes=interval)
 print('Scheduler started...')
 
-try:
-    scheduler.start()
-except (KeyboardInterrupt, SystemExit):
-    pass
 
 if __name__ == '__main__':
-    listener = MyStreamListener()  
-    api.stream_public(listener)
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+
+    try:
+        listen()
+    except MastodonNetworkError:
+        print('Network Error')
+        listen()
+    
