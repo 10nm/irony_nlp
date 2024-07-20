@@ -12,6 +12,7 @@
 mkdir csv
 python3 getposts.py
 ```
+適宜pm2等を利用する(エラー対処)
 
 ## 仕様
 ### プログラム
