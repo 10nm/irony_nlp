@@ -18,24 +18,35 @@ import time
 import datetime
 import pandas
 from tqdm import tqdm
+import logging
+
+global check_word
+check_word = str(os.environ.get("CHECKWORD"))
+
+#file paths
+posts_path = 'logs/csv/posts.csv'
+checkword_path = f'logs/csv/{check_word}.csv'
+pps_path = 'logs/csv/posts_per_sec.csv'
+error_log_path = 'logs/error.log'
 
 global unit
 # 保存する単位(nポスト/回)
 unit = 50
-
-global check_word
-check_word = str(os.environ.get("CHECKWORD"))
 
 scheduler = BackgroundScheduler()
 
 global df_posts_per_sec
 global posts_per_sec
 df_posts_per_sec = pandas.DataFrame(columns=['Timestamp', 'PostsPerSec'])
-df_posts_per_sec = pandas.read_csv('csv/posts_per_sec.csv')
+df_posts_per_sec = pandas.read_csv(pps_path)
 posts_per_sec = 0
 
 global session_posts_count
 session_posts_count = 0
+
+# ログの設定
+logging.basicConfig(filename='error.log', level=logging.ERROR, 
+                    format='%(asctime)s %(levelname)s %(message)s')
 
 # 記録インターバル(min)
 interval = 5
@@ -54,17 +65,17 @@ def savePPS():
     posts_per_sec = session_posts_count / (interval*60)
     new_row = {'Timestamp': now, 'PostsPerSec': posts_per_sec}
     df_posts_per_sec = pandas.concat([df_posts_per_sec, pandas.DataFrame([new_row])], ignore_index=True)
-    df_posts_per_sec.to_csv('csv/posts_per_sec.csv', index=False)
+    df_posts_per_sec.to_csv(pps_path, index=False)
     session_posts_count = 0
 
 def save_csv(posts, n):
     if n == 0:
-        with open('csv/posts.csv', 'a', encoding='utf-8') as f:
+        with open(posts_path, 'a', encoding='utf-8') as f:
             writer = csv.writer(f)
             for post in posts:
                 writer.writerow([post])
     else:
-        with open(f'csv/{check_word}.csv', 'a', encoding='utf-8') as f:
+        with open(checkword_path, 'a', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([posts])
 
@@ -96,7 +107,7 @@ class MyStreamListener(StreamListener):
         self.csv_row_count = 0
         self.tqdm_bar = tqdm(total=unit, desc=f"session:{self.session_count}", leave=True)
         
-        with open('csv/posts.csv', 'r', encoding='utf-8') as f:
+        with open(posts_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             row_count = sum(1 for row in reader)
             self.csv_row_count = row_count
@@ -153,9 +164,12 @@ if __name__ == '__main__':
     except (KeyboardInterrupt, SystemExit):
         pass
 
-    try:
-        listen()
-    except MastodonNetworkError:
-        print('Network Error')
-        listen()
-    
+    while True:
+        try:
+            listen()
+        except Exception as e:
+            error_message = f"{datetime.now()} - Error: {str(e)}"
+            logging.error(error_message)
+            print(error_message)
+            time.sleep(10)
+            continue
