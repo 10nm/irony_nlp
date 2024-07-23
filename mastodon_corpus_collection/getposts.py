@@ -64,6 +64,7 @@ def savePPS():
     now = datetime.datetime.now()
     posts_per_sec = session_posts_count / (interval*60)
     new_row = {'Timestamp': now, 'PostsPerSec': posts_per_sec}
+    df_posts_per_sec = pandas.read_csv(pps_path)
     df_posts_per_sec = pandas.concat([df_posts_per_sec, pandas.DataFrame([new_row])], ignore_index=True)
     df_posts_per_sec.to_csv(pps_path, index=False)
     session_posts_count = 0
@@ -168,7 +169,7 @@ if __name__ == '__main__':
         try:
             listen()
         except Exception as e:
-            error_message = f"{datetime.now()} - Error: {str(e)}"
+            error_message = f"{datetime.datetime.now()} - Error: {str(e)}"
             logging.error(error_message)
             print(error_message)
             time.sleep(10)
