@@ -14,6 +14,8 @@ model.to(device)
 
 def vectorize(texts):
     inputs = tokenizer(texts, return_tensors="pt",padding=True, truncation=True, max_length=512)
+    #  モデルを確実にGPUに載せる
+    inputs = {key: value.to(device) for key, value in inputs.items()}
     with torch.no_grad():
         outputs = model(**inputs)
     output = outputs[0]
