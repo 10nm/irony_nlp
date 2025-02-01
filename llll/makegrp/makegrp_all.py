@@ -10,6 +10,7 @@ def load_data(file_path):
 
 def create_bubble_scatter_plot(data):
     plt.figure(figsize=(10, 6))
+
     plt.scatter(data['learning_rate'], data['f1'], s=(((data['epoch']*10)**2)/3), alpha=0.5, edgecolors='w', linewidth=0.7)
     plt.xscale('log')
     plt.ylim(0, 0.75)
@@ -20,9 +21,9 @@ def create_bubble_scatter_plot(data):
     plt.xlabel('Learning rate')
     plt.ylabel('F1 score')
     plt.grid(True)
-    plt.savefig('./bubble_scatter_plot_all.png')
+    plt.savefig('./plot/bubble_scatter_plot_all.png')
 
 
 if __name__ == "__main__":
-    data = load_data('./bbbbb.csv')
+    data = load_data('./extracted_data.csv')
     create_bubble_scatter_plot(data)
