@@ -1,0 +1,8 @@
+Evaluation Metrics:
+Confusion Matrix:
+[[88 12]
+ [52 48]]
+Accuracy: 0.6800
+Precision: 0.8000
+Recall: 0.4800
+F1 Score: 0.6000
