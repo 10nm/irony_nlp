@@ -11,13 +11,26 @@ import json
 import signal
 import sys
 import pandas as pd
+import cohere
 
-api_key = os.getenv("GEMINI_API_KEY")
+# Gemini APIの設定
+api_key_gemini = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=api_key_gemini)
+gemini_model = genai.GenerativeModel("gemini-2.0-flash-lite")
 
-genai.configure(api_key=api_key)
+# Cohere APIの設定
+api_key = os.getenv("CO_API_KEY")
 
-model = genai.GenerativeModel("gemini-2.0-flash-lite")
+co = cohere.Client(
+    api_key=api_key,
+)
 
+# Groqの設定
+from groq import Groq
+
+client = Groq(
+    api_key=os.environ.get("GROQ_API_KEY"),
+)
 
 def load_csv(file_path):
     """CSVファイルを読み込み、データフレームを返す関数
@@ -91,9 +104,10 @@ def allow_or_deny():
         elif key == "d":
             return False
         elif key == "q":
-            return 
+            return
         else:
             print("aまたはdまたはqを入力してください")
+
 
 def labeling_manual(data, index):
     """手動ラベリングを行う関数
@@ -116,50 +130,158 @@ def labeling_manual(data, index):
         else:
             print("1か4の数字を入力してください")  # エラーメッセージを表示
 
+def get_chat_completion(prompt, model):
+    """チャットの生成を行う関数
+    Args:
+        prompt (str): チャットのプロンプト
+        model (str): モデル名
+    Returns:
+        str: チャットの生成結果
+    """
+
+    # F
+    if model == "GEMINI":
+        response = gemini_model.generate_content(prompt)
+        response = response.text
+        return response
+    
+    # P
+    elif model == "COHERE":
+        chat = co.chat(
+            message=prompt,
+            model="command-r-plus-08-2024",
+        )
+        response = chat.chat_history[-1].message
+        return response
+    
+    # F
+    elif model == "LLAMA":
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            stream=False,
+        )
+        response = chat_completion.choices[0].message.content
+        return response
+    
+    # F
+    elif model == "DEEPSEEK":
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="deepseek-r1-distill-qwen-32b",
+            stream=False,
+        )
+        response = chat_completion.choices[0].message.content
+        return response
+    
+    else:
+        print("error")
+        return None
+
+def extract_ironic(response):
+    """アイロニックか否かを抽出する関数
+    Args:
+        response (str): チャットの生成結果
+    Returns:
+        str: アイロニックか否か (0: 皮肉, 1: 非皮肉, 9: エラー)
+    """
+    pattern = r"<ironic>(.*?)</ironic>"
+    matches = re.findall(pattern, response, re.DOTALL)
+    print(matches)
+    if matches:
+        if matches[0] == "yes":
+            return "0"
+        elif matches[0] == "no":
+            return "1"
+        else:
+            return "9"
+    else:
+        return "9"
+
 def labeling_auto(data):
-    """ 自動ラベリングを行う関数
+    """ ラベリング候補を自動で生成する関数
     Args:
         data (str): ラベリングするデータ
-
     Returns:
-        str: ラベリング結果 (1: ironic, 4: not ironic, 0: error)
+        str: ラベル (1: 皮肉 4: 非皮肉 / ニュートラル)
     """
     utr = data["Utterance"].replace("\n", " ")
     res = data["Response"].replace("\n", " ")
 
     prompt = f"""
 # 皮肉判定タスク
-以下の対話から、発話者Aに対するBの返答が皮肉(アイロニー)を含むか否かを判定してください。
-結果は、<ironic> </ironic>のタグで囲んだ、
-<ironic>yes</ironic> または <ironic>no</ironic> のみで回答してください。
-固有名詞を含む場合は簡潔に説明を入れ、yesの場合のみその理由も記載してください。
+以下の対話から、発話者Aに対するBの返答が、Aの発言に対しての皮肉(アイロニー)か否かを判定してください。
+結果は、<ironic> </ironic>のタグで囲んだ、<ironic>yes</ironic> または <ironic>no</ironic> のみで回答してください。
+ただし、固有名詞(人名など)を含む場合はそれについての簡潔な説明を入れてください。
 
 # 対話
 A: {utr}
 B: {res}
 """
-    response = model.generate_content(prompt)
-    response = response.text
-    print(response)
-    pattern = r"<ironic>(.*?)</ironic>"
-    matches = re.findall(pattern, response, re.DOTALL)
-    print(matches)
-    if matches:
-        if matches[0] == "yes":
-            return "1"
-        elif matches[0] == "no":
-            return "4"
-        else:
+    
+    return_counter = 0
+
+    print("--------------------")
+    # DEEPSEEK
+    deepseek_response_text = get_chat_completion(prompt, "DEEPSEEK")
+    deepseek_response = extract_ironic(deepseek_response_text)
+    if deepseek_response:
+        return_counter += 1
+    print(f"DEEPSEEK_TEXT: {deepseek_response_text}")
+    print(f"DEEPSEEK_RESP: {deepseek_response}")
+
+    # GEMINI
+    gemini_response_text = get_chat_completion(prompt, "GEMINI")
+    gemini_response = extract_ironic(gemini_response_text)
+    print(f"GEMINI_TEXT: {gemini_response_text}")
+    print(f"GEMINI_RESP: {gemini_response}")
+    if gemini_response:
+        return_counter += 1
+
+    # LLAMA
+    llama_response_text = get_chat_completion(prompt, "LLAMA")
+    llama_response = extract_ironic(llama_response_text)
+    print(f"LLAMA_TEXT: {llama_response_text}")
+    print(f"LLAMA_RESP: {llama_response}")
+    if llama_response:
+        return_counter += 1
+
+    if return_counter == 3:
+        print(f"G: {"Y" if gemini_response == "0" else "N"} L: {"Y" if llama_response == "0" else "N"} D: {"Y" if deepseek_response == "0" else "N"}")
+        print("--------------------")
+
+        # いずれかのエラー発生時
+        if gemini_response == "9" or llama_response == "9" or deepseek_response == "9":
+            print("LLM_JUDGE: エラー")
             return "0"
-    else:
-        return "0"
+        
+        # 多数決 0,1: 皮肉, 2,3: 非皮肉
+        LLM_JUDGE = int(gemini_response) + int(llama_response) + int(deepseek_response)
+        if LLM_JUDGE <= 1:
+            # 皮肉
+            print("LLM_JUDGE: 皮肉")
+            return "1"
+        else:
+            # 非皮肉
+            print("LLM_JUDGE: 非皮肉")
+            return "4"
 
-
-def label_data(file_path, last_index):
+def label_data(file_path, last_index, with_LLM):
     """データにラベルを付ける関数
     Args:
         file_path (str): ラベル付けするコーパスCSVの絶対パス
         last_index (int): 最後にラベル付けしたデータのインデックス
+        with_LLM (bool): LLMを使うかどうか
     Returns:
         pandas.DataFrame: ラベル付けされたデータ
         index (int): 最後にラベル付けしたデータのインデックス
@@ -181,22 +303,28 @@ def label_data(file_path, last_index):
         print(row["Response"].replace("\n", " "))  # UtteranceとResponseを表示
 
         # 自動でのラベリング
-        label = labeling_auto(row)
-        if label == "0":  # エラーが発生した場合
-            is_break = labeling_manual(data, index)  # 手動ラベリング
-            if is_break:
-                break
-        elif label == "1" or label == "4":
-            a_d = allow_or_deny()
-            if a_d is not None:
-                if a_d: # aが入力された場合
-                    data.at[index, 'label'] = int(label)  # labelを更新
-                else: # dが入力された場合
-                    data.at[index, 'label'] = 4 if label == "1" else 1 # label反転して更新
-            else: # qが入力された場合
-                break
+        if with_LLM:
+            label = labeling_auto(row)
+            if label == "0":  # エラーが発生した場合
+                is_break = labeling_manual(data, index)  # 手動ラベリング
+                if is_break:
+                    break
+            elif label == "1" or label == "4":
+                a_d = allow_or_deny()
+                if a_d is not None:
+                    if a_d:  # aが入力された場合
+                        data.at[index, 'label'] = int(label)  # labelを更新
+                    else:  # dが入力された場合
+                        # label反転して更新
+                        data.at[index, 'label'] = 4 if label == "1" else 1
+                else:  # qが入力された場合
+                    break
+            else:
+                print("error")
+                is_break = labeling_manual(data, index)
+                if is_break:
+                    break
         else:
-            print("error")
             is_break = labeling_manual(data, index)
             if is_break:
                 break
@@ -275,8 +403,19 @@ def main():
     file_path = os.path.join(selected_dir_path, selected_file)  # これはコーパスの絶対パス
     print(f"選択されたファイル: {file_path}")
 
+    while True:
+        with_LLM = str(input("LLMを使いますか？ (y/n): "))
+        if with_LLM == "y":
+            with_LLM = True
+            break
+        elif with_LLM == "n":
+            with_LLM = False
+            break
+        else:
+            print("yまたはnを入力してください")
+
     if os.path.exists(file_path):
-        data, index = label_data(file_path, last_index)  # ラベル付け
+        data, index = label_data(file_path, last_index, with_LLM)  # ラベル付け
         if data is not None:
             output_file_path = os.path.join(
                 selected_dir_path, file_path)  # 出力ファイルのパス
