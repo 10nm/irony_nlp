@@ -259,6 +259,7 @@ def main():
         "num_warmup_steps_ratio": 0.3, "early_stopping_patience": 3,
         "id2label": {"0": "NOTIRONY", "1": "IRONY"},
         "label2id": {"NOTIRONY": 0, "IRONY": 1},
+        "dataset_path": "../datasets/train_balanced.csv"
     }
     set_seed(config['seed'])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -271,7 +272,8 @@ def main():
     os.makedirs(os.path.join(output_dir, "fold_histories"), exist_ok=True)
     print(f"\nOutput will be saved to: {output_dir}")
 
-    df = pd.read_csv('training_pool.csv')
+    # データセットパスをconfigから取得
+    df = pd.read_csv(config['dataset_path'])
     skf = StratifiedKFold(n_splits=config['n_splits'], shuffle=True, random_state=config['seed'])
     
     all_histories = []
