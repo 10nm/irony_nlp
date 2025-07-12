@@ -14,6 +14,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_
 from datasets import Dataset, ClassLabel
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
+import torch.nn as nn
+import torch.nn.functional as F
 
 # =====================================================================================
 # 1. 基本設定とヘルパー関数
@@ -56,6 +58,55 @@ def preprocess_data(df, tokenizer, config):
     )
     tokenized_dataset.set_format('torch')
     return tokenized_dataset
+
+# =====================================================================================
+# Focal Loss 実装
+# =====================================================================================
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for binary/multiclass classification.
+    Args:
+        alpha (float or list): class weight. If float, binary classification. If list, multiclass.
+        gamma (float): focusing parameter.
+        reduction (str): 'mean', 'sum', or 'none'
+    """
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        """
+        logits: (batch, num_classes)
+        targets: (batch,) int64
+        """
+        if logits.size(-1) == 1 or logits.size(-1) == 2:
+            # Binary classification (assume logits shape [B,2])
+            ce_loss = F.cross_entropy(logits, targets, reduction='none')
+            pt = torch.exp(-ce_loss)
+            if isinstance(self.alpha, (float, int)):
+                at = torch.ones_like(targets, dtype=logits.dtype, device=logits.device) * self.alpha
+                at = torch.where(targets == 1, at, 1 - at)
+            else:
+                at = torch.tensor([self.alpha[i] for i in targets.cpu().numpy()], device=logits.device, dtype=logits.dtype)
+            focal_loss = at * (1 - pt) ** self.gamma * ce_loss
+        else:
+            # Multiclass
+            ce_loss = F.cross_entropy(logits, targets, reduction='none')
+            pt = torch.exp(-ce_loss)
+            if isinstance(self.alpha, (list, tuple, torch.Tensor)):
+                at = torch.tensor([self.alpha[i] for i in targets.cpu().numpy()], device=logits.device, dtype=logits.dtype)
+            else:
+                at = 1.0
+            focal_loss = at * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
 
 # =====================================================================================
 # 2. グラフ描画と結果保存の関数
@@ -184,13 +235,24 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
     best_model_state = None
     epochs_without_improvement = 0
 
+    # Focal Lossの初期化
+    use_focal = config.get('use_focal_loss', False)
+    if use_focal:
+        focal_alpha = config.get('focal_alpha', 0.25)
+        focal_gamma = config.get('focal_gamma', 2.0)
+        focal_loss_fn = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, reduction='mean')
+
     for epoch in range(config['num_epochs']):
         model.train()
         total_train_loss = 0
         for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1} Training", leave=False):
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
-            loss = outputs.loss
+            if use_focal:
+                # Focal Lossでloss計算
+                loss = focal_loss_fn(outputs.logits, batch['labels'])
+            else:
+                loss = outputs.loss
             total_train_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -207,7 +269,10 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
             for batch in val_dataloader:
                 batch = {k: v.to(device) for k, v in batch.items()}
                 outputs = model(**batch)
-                loss = outputs.loss
+                if use_focal:
+                    loss = focal_loss_fn(outputs.logits, batch['labels'])
+                else:
+                    loss = outputs.loss
                 total_val_loss += loss.item()
                 predictions = torch.argmax(outputs.logits, dim=-1)
                 all_preds.extend(predictions.cpu().numpy())
@@ -259,7 +324,10 @@ def main():
         "num_warmup_steps_ratio": 0.3, "early_stopping_patience": 3,
         "id2label": {"0": "NOTIRONY", "1": "IRONY"},
         "label2id": {"NOTIRONY": 0, "IRONY": 1},
-        "dataset_path": "../datasets/train_balanced.csv"
+        "dataset_path": "../datasets/train_unbalanced.csv",
+        "use_focal_loss": True,  # focal lossを使う場合はTrue
+        "focal_alpha": 0.25,     # IRONYクラスの重み
+        "focal_gamma": 2.0       # フォーカスパラメータ
     }
     set_seed(config['seed'])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
