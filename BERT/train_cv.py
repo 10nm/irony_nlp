@@ -232,6 +232,10 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
     metrics = {name: evaluate.load(name) for name in ["accuracy", "precision", "recall", "f1"]}
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': [], 'val_precision': [], 'val_recall': [], 'val_f1': []}
     best_val_f1 = 0.0
+
+    # best_val_lossの初期化
+    best_val_loss = float('inf')
+
     best_model_state = None
     epochs_without_improvement = 0
 
@@ -293,13 +297,21 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
         
         print(f"Epoch {epoch+1}/{config['num_epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
 
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
+        #if val_f1 > best_val_f1:
+        #    best_val_f1 = val_f1
+        #    best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+        #    epochs_without_improvement = 0
+        #else:
+        #    epochs_without_improvement += 1
+       
+        # lossの未改善によるEarly Stopping
+        if avg_val_loss < best_val_loss: 
+            best_val_loss = avg_val_loss
             best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
-        
+
         if epochs_without_improvement >= config['early_stopping_patience']:
             print(f"  -> Early stopping triggered at epoch {epoch+1}.")
             break
@@ -319,8 +331,8 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
 def main():
     config = {
         "model_name": "tohoku-nlp/bert-base-japanese-whole-word-masking",
-        "n_splits": 5, "seed": 42, "max_length": 256, "batch_size": 32,
-        "num_epochs": 10, "learning_rate": 1.0e-5, "weight_decay": 0.2,
+        "n_splits": 5, "seed": 42, "max_length": 256, "batch_size": 16,
+        "num_epochs": 15, "learning_rate": 8.0e-6, "weight_decay": 0.2,
         "num_warmup_steps_ratio": 0.3, "early_stopping_patience": 3,
         "id2label": {"0": "NOTIRONY", "1": "IRONY"},
         "label2id": {"NOTIRONY": 0, "IRONY": 1},
