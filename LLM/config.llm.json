@@ -1,0 +1,18 @@
+{
+  "api_settings": {
+    "model_name": "gemini-2.0-flash",
+    "request_delay_seconds": 1.0
+  },
+  "evaluation_settings": {
+    "output_dir_base": "llm_eval_results",
+    "datasets_to_test": {
+      "eval_balanced": "../datasets/eval_balanced.csv",
+      "eval_unbalanced": "../datasets/eval_unbalanced.csv"
+    }
+  },
+  "prompt_templates": {
+    "zero_shot": "prompts/zero_shot.txt",
+    "few_shot": "prompts/few_shot.txt",
+    "cot": "prompts/cot.txt"
+  }
+}

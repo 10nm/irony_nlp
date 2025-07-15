@@ -32,103 +32,153 @@ def initialize_gemini_model(api_key, model_name):
 def get_gemini_response(model, prompt):
     """
     モデルインスタンスとプロンプトを受け取り、APIを呼び出して結果を返す。
-    JSONのパースとエラーハンドリングもここで行う。
+    応答全体をJSONとして抽出・パースし、'label'と'analysis'を返す。
     """
     raw_response_text = "ERROR: NO_RESPONSE"
     try:
-        # JSON出力を強制するための設定
         generation_config = GenerationConfig(response_mime_type="application/json")
-        
-        # API呼び出し
         response = model.generate_content(contents=prompt, generation_config=generation_config)
         raw_response_text = response.text
-        
-        # LLMが返しがちなMarkdownブロックを正規表現で除去
-        match = re.search(r"```(json)?\s*([\s\S]*?)\s*```", raw_response_text)
-        json_str = match.group(2).strip() if match else raw_response_text.strip()
-        
-        # JSONをパースし、'label'キーの値を取得
-        result_json = json.loads(json_str)
-        parsed_label = result_json.get('label', 'ERROR_MISSING_KEY')
-        return parsed_label, raw_response_text
-    
-    except json.JSONDecodeError:
-        return "ERROR_JSON_DECODE", raw_response_text
-    except Exception as e:
-        # APIからのブロックなど、その他のエラー
-        if 'response' in locals() and hasattr(response, 'prompt_feedback'):
-             print(f"\nAPI Error. Prompt Feedback: {response.prompt_feedback}")
+
+        def extract_json(text):
+            # 1. Markdownブロック ```json ... ``` or ``` ... ```
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip()
+                if candidate.startswith("{") and candidate.endswith("}"):
+                    return candidate
+            # 2. 最初の { ... } ブロック（ネスト対応）
+            stack = []
+            start = None
+            for i, c in enumerate(text):
+                if c == '{':
+                    if not stack:
+                        start = i
+                    stack.append('{')
+                elif c == '}':
+                    if stack:
+                        stack.pop()
+                        if not stack and start is not None:
+                            candidate = text[start:i+1]
+                            try:
+                                obj = json.loads(candidate)
+                                if 'label' in obj and 'analysis' in obj:
+                                    return candidate
+                            except Exception:
+                                pass
+                            start = None
+            # 3. "label"と"analysis"を含むJSONらしい行
+            match = re.search(r"(\{[^\{\}]*?\"label\"\s*:\s*.*?\"analysis\"\s*:\s*\[.*?\][^\{\}]*?\})", text, re.DOTALL)
+            if match:
+                return match.group(1)
+            return None
+
+        json_str = extract_json(raw_response_text)
+        if json_str:
+            try:
+                result_json = json.loads(json_str)
+                label = result_json.get('label', None)
+                analysis = result_json.get('analysis', None)
+                if label is not None and analysis is not None:
+                    return label, analysis, raw_response_text
+                elif label is not None:
+                    return label, None, raw_response_text
+                else:
+                    return "ERROR_MISSING_KEY", None, raw_response_text
+            except Exception as e:
+                return f"ERROR_JSON_DECODE: {e}", None, raw_response_text
         else:
-             print(f"\nAn unexpected API error occurred: {e}")
-        return "ERROR_API", raw_response_text
+            return "ERROR_JSON_NOT_FOUND", None, raw_response_text
+
+    except Exception as e:
+        if 'response' in locals() and hasattr(response, 'prompt_feedback'):
+            print(f"\nAPI Error. Prompt Feedback: {response.prompt_feedback}")
+        else:
+            print(f"\nAn unexpected API error occurred: {e}")
+        return "ERROR_API", None, raw_response_text
 
 # =============================================================================
 # セクション 2: 評価の実行と結果の分析・保存を担当する関数
 # =============================================================================
 
-def run_evaluation_for_prompt(model, config, test_df, prompt_obj, prompt_name, output_dir):
-    """単一のプロンプトでデータセット全体を評価し、ログと結果を返す"""
+def load_prompt_template(prompt_path):
+    """プロンプトテンプレートファイルを読み込む"""
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+def run_evaluation_for_prompt(model, config, test_df, prompt_path, prompt_name, output_dir):
+    """
+    単一のプロンプトでデータセット全体を評価し、正誤表を保存。
+    analysisもconfigに応じて保存。
+    """
     print(f"\n===== Evaluating with prompt: '{prompt_name}' =====")
-    
-    # prompt_template = prompt_obj['template']
-    prompt_template = """あなたは対話分析の専門家です。以下の例を参考に、「ユーザーの発言」と「それに対する応答」を分析し、応答が皮肉(Irony)か、そうでない(Not Irony)かを判断してください。
+    prompt_template = load_prompt_template(prompt_path)
+    print(f"Prompt template loaded from: {prompt_path}")
+    print("----- Prompt Template Content (first 500 chars) -----")
+    print(prompt_template[:500])
+    print("-----------------------------------------------------")
 
-# 指示
-- 応答が皮肉を含んでいる場合は "IRONY" と分類してください。
-- 応答が皮肉を含んでいない場合は "NOTIRONY" と分類してください。
-- 回答は必ず `{{\"label\": \"分類結果\"}}` というJSON形式で出力してください。
-
----
-# 例1
-ユーザーの発言: このレストラン、すごく評価が高いんだって！
-応答: うん、この生温かいスープとゴムみたいなステーキは、まさに至高の味だね。
-# JSON出力
-{{\"label\": \"IRONY\"}}
----
-# 例2
-ユーザーの発言: 今日のプレゼンどうだった？
-応答: すごく分かりやすかったよ！特にデータの説明が丁寧で助かった。
-# JSON出力
-{{\"label\": \"NOTIRONY\"}}
----
-
-# 本番の対話
-ユーザーの発言: {utterance}
-応答: {response}
-# JSON出力
-"""
-    print(f"Prompt template content: {prompt_template}")
     delay = config['api_settings']['request_delay_seconds']
     references = test_df['label'].map({0: "NOTIRONY", 1: "IRONY"}).tolist()
-    
-    log_entries = []
+    save_analysis = config.get('save_analysis_json', True)
+
+    eval_entries = []
+    first_prompt_printed = False
     for index, row in tqdm(test_df.iterrows(), total=len(test_df), desc=f"Prompt: {prompt_name}"):
-        
         utterance_val = str(row['Utterance'])
         response_val = str(row['Response'])
         prompt = prompt_template.format(utterance=utterance_val, response=response_val)
-        print(f"\nProcessing index {index}: {prompt}")
-        parsed_label, raw_response = get_gemini_response(model, prompt)
-        
-        # エラー発生時にコンソールに通知
-        if "ERROR" in parsed_label:
+        parsed_label, analysis, raw_response = get_gemini_response(model, prompt)
+        # 初回のみプロンプトと生応答を表示
+        if not first_prompt_printed:
+            print("\n========== [First Prompt Example] ==========")
+            print(prompt)
+            print("========== [First LLM Raw Response] ==========")
+            print(raw_response)
+            print("=============================================")
+            first_prompt_printed = True
+        if "ERROR" in str(parsed_label):
             print(f"\n[!] Warning at index {index}: Parsed as '{parsed_label}'. Raw response: '{raw_response}'")
-
-        log_entries.append({
-            'index': index, 'reference_label': references[index], 'predicted_label': parsed_label,
-            'utterance': row['Utterance'], 'response': row['Response'],
-            'llm_response_raw': raw_response, 'prompt': prompt
-        })
+        entry = {
+            'index': index,
+            'dataset': os.path.basename(config['current_dataset_path']),
+            'reference_label': references[index],
+            'predicted_label': parsed_label,
+            'is_correct': references[index] == parsed_label,
+            'utterance': row['Utterance'],
+            'response': row['Response'],
+            'llm_response_raw': raw_response,
+            'prompt': prompt,
+            # 元データセットの全カラムも保存
+            **{col: row[col] for col in test_df.columns if col not in ['Utterance', 'Response', 'label']}
+        }
+        if save_analysis:
+            entry['llm_analysis'] = analysis
+        eval_entries.append(entry)
         time.sleep(delay)
 
-    # 詳細ログをCSVに保存
-    log_df = pd.DataFrame(log_entries)
-    log_path = os.path.join(output_dir, f"predictions_log_{prompt_name}.csv")
-    log_df.to_csv(log_path, index=False, encoding='utf-8-sig')
-    print(f"Detailed prediction log saved to: {log_path}")
+    eval_df = pd.DataFrame(eval_entries)
+    eval_path = os.path.join(output_dir, f"detailed_eval_{prompt_name}.csv")
+    eval_df.to_csv(eval_path, index=False, encoding='utf-8-sig')
+    print(f"Detailed evaluation table saved to: {eval_path}")
 
-    # 性能指標を計算して返す
-    predictions = log_df['predicted_label'].tolist()
+    # analysisのjsonも保存
+    if save_analysis:
+        analysis_json_path = os.path.join(output_dir, f"analysis_{prompt_name}.jsonl")
+        with open(analysis_json_path, "w", encoding="utf-8") as f:
+            for entry in eval_entries:
+                if 'llm_analysis' in entry and entry['llm_analysis'] is not None:
+                    json.dump({
+                        "index": entry['index'],
+                        "analysis": entry['llm_analysis'],
+                        "predicted_label": entry['predicted_label'],
+                        "utterance": entry['utterance'],
+                        "response": entry['response']
+                    }, f, ensure_ascii=False)
+                    f.write("\n")
+        print(f"Analysis JSONL saved to: {analysis_json_path}")
+
+    predictions = eval_df['predicted_label'].tolist()
     return analyze_and_save_report(references, predictions, prompt_name, output_dir)
 
 def analyze_and_save_report(references, predictions, prompt_name, output_dir):
@@ -210,12 +260,13 @@ def main():
         print(f"\n\n<<<<< Processing Dataset: {dataset_name.upper()} ({csv_path}) >>>>>")
         test_df = pd.read_csv(csv_path)
         print(f"Columns in {csv_path}: {test_df.columns.tolist()}")
+        config['current_dataset_path'] = csv_path  # 現在のデータセットパスを記録
 
-        for prompt_name, prompt_obj in config['prompt_templates'].items():
+        for prompt_name, prompt_path in config['prompt_templates'].items():
             prompt_output_dir = os.path.join(output_dir, dataset_name)
             os.makedirs(prompt_output_dir, exist_ok=True)
             
-            summary = run_evaluation_for_prompt(model, config, test_df, prompt_obj, prompt_name, prompt_output_dir)
+            summary = run_evaluation_for_prompt(model, config, test_df, prompt_path, prompt_name, prompt_output_dir)
             summary['dataset_name'] = dataset_name
             all_results_summary.append(summary)
 
