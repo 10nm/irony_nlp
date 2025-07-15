@@ -19,6 +19,11 @@ import torch.nn.functional as F
 def load_final_model(model_path, config):
     """保存されたstate_dict (.pt) からモデルを読み込む"""
     print(f"Loading model state_dict from: {model_path}")
+
+    if not os.path.exists(model_path) or os.path.getsize(model_path) == 0:
+        print(f"Error: Model file not found or is empty: {model_path}")
+        return None, None
+
     tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
     model = AutoModelForSequenceClassification.from_pretrained(
         config['model_name'],
@@ -26,7 +31,17 @@ def load_final_model(model_path, config):
         id2label=config['id2label'],
         label2id=config['label2id']
     )
-    state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+    
+    try:
+        state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+    except Exception as e:
+        print(f"Error loading model file with torch.load: {e}")
+        return None, None
+
+    if state_dict is None:
+        print(f"Error: Loaded state_dict is None. The file at {model_path} might be empty or corrupted.")
+        return None, None
+
     model.load_state_dict(state_dict)
     print("Model loaded successfully.")
     return tokenizer, model
@@ -177,7 +192,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate the final fine-tuned model on the test set.")
     parser.add_argument("--model_pt_path", type=str, required=True, help="Path to the saved model state_dict (.pt file).")
     parser.add_argument("--test_csv_path", type=str, required=True, help="Path to the test CSV file (e.g., test_set.csv).")
-    parser.add_argument("--output_dir_base", type=str, default="final_evaluation", help="Base directory to save evaluation results.")
+    parser.add_argument("--output_dir_base", type=str, default="eval_results", help="Base directory to save evaluation results.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for evaluation.")
     args = parser.parse_args()
 
@@ -212,6 +227,9 @@ def main():
 
     # 1. モデルとトークナイザーを読み込み
     tokenizer, model = load_final_model(args.model_pt_path, config)
+    if model is None:
+        print("Failed to load model, stopping evaluation.")
+        return
     
     # 2. テストデータを準備
     test_dataset = preprocess_test_data(args.test_csv_path, tokenizer, config)

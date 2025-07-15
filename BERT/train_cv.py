@@ -297,12 +297,9 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
         
         print(f"Epoch {epoch+1}/{config['num_epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
 
-        #if val_f1 > best_val_f1:
-        #    best_val_f1 = val_f1
-        #    best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-        #    epochs_without_improvement = 0
-        #else:
-        #    epochs_without_improvement += 1
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
        
         # lossの未改善によるEarly Stopping
         if avg_val_loss < best_val_loss: 
@@ -323,7 +320,7 @@ def train_one_fold(fold, train_df, val_df, config, device, output_dir):
     gc.collect()
     torch.cuda.empty_cache()
     
-    return best_val_f1, best_model_state, history
+    return best_val_loss, best_model_state, history, best_val_f1
 
 # =====================================================================================
 # 4. main関数
@@ -332,14 +329,14 @@ def main():
     config = {
         "model_name": "tohoku-nlp/bert-base-japanese-whole-word-masking",
         "n_splits": 5, "seed": 42, "max_length": 256, "batch_size": 16,
-        "num_epochs": 15, "learning_rate": 8.0e-6, "weight_decay": 0.2,
+        "num_epochs": 15, "learning_rate": 8.0e-6, "weight_decay": 0.01,
         "num_warmup_steps_ratio": 0.3, "early_stopping_patience": 3,
         "id2label": {"0": "NOTIRONY", "1": "IRONY"},
         "label2id": {"NOTIRONY": 0, "IRONY": 1},
         "dataset_path": "../datasets/train_unbalanced.csv",
         "use_focal_loss": True,  # focal lossを使う場合はTrue
         "focal_alpha": 0.25,     # IRONYクラスの重み
-        "focal_gamma": 2.0       # フォーカスパラメータ
+        "focal_gamma": 4.0       # フォーカスパラメータ
     }
     set_seed(config['seed'])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -358,20 +355,20 @@ def main():
     
     all_histories = []
     oof_val_scores = []
-    best_overall_f1 = 0.0
+    best_overall_loss = 0.0
     best_model_state_overall = None
     best_fold_index = -1
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(df, df['label'])):
         train_df, val_df = df.iloc[train_idx], df.iloc[val_idx]
         
-        val_f1, model_state, history = train_one_fold(fold, train_df, val_df, config, device, output_dir)
+        val_loss, model_state, history, val_f1 = train_one_fold(fold, train_df, val_df, config, device, output_dir)
         
         oof_val_scores.append(val_f1)
         all_histories.append(history)
 
-        if val_f1 > best_overall_f1:
-            best_overall_f1 = val_f1
+        if val_loss < best_overall_loss:
+            best_overall_loss = val_loss
             best_model_state_overall = model_state
             best_fold_index = fold
             
